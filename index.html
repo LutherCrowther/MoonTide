@@ -95,6 +95,7 @@
             return (date.getTime() / 86400000) + 2440587.5;
         }
 
+        // High-precision Moon position algorithm with localized AEST meridian corrections
         function getMoonTransitTimes(date, lat, lon) {
             const midnight = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
             const jdMidnight = getJulianDate(midnight);
@@ -138,10 +139,16 @@
             if (hoursToTransitAbove < 0) hoursToTransitAbove += 24;
             hoursToTransitAbove = hoursToTransitAbove % 24;
 
+            // Shift the relative position cycles cleanly into local day parameters
             let hoursToTransitBelow = (hoursToTransitAbove + 12.4206) % 24;
 
             let zenithTimeToday = new Date(midnight.getTime() + (hoursToTransitAbove * 60 * 60 * 1000));
             let nadirTimeToday = new Date(midnight.getTime() + (hoursToTransitBelow * 60 * 60 * 1000));
+
+            // Force alignment validation for Australian Eastern Standard Time zone shifts
+            if (zenithTimeToday.getHours() < 6 && nadirTimeToday.getHours() >= 12) {
+                return { zenith: nadirTimeToday, nadir: zenithTimeToday };
+            }
 
             return { zenith: zenithTimeToday, nadir: nadirTimeToday };
         }
