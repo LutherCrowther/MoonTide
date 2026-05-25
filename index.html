@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Townsville Astro-Marine Tracker</title>
+    
+    <link rel="manifest" href="manifest.json">
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="AstroMarine">
+    <link rel="apple-touch-icon" href="icon-192.png">
+
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col items-center justify-center p-4 font-sans">
+
+    <div class="max-w-md w-full bg-slate-800 rounded-2xl p-6 shadow-xl border border-slate-700 text-center">
+        <h1 class="text-2xl font-bold mb-2 text-indigo-400">🌙 Astro-Marine Tracker</h1>
+        <p class="text-xs text-slate-400 mb-6 font-mono">Custom Date Moon & Tide Lookup</p>
+        
+        <div class="bg-slate-900/50 border border-slate-700 rounded-xl p-4 mb-6 text-left space-y-2">
+            <label for="targetDateInput" class="text-xs font-mono uppercase tracking-wider text-slate-400 block font-semibold">
+                Select Target Date:
+            </label>
+            <div class="flex gap-2">
+                <input type="date" id="targetDateInput" class="bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-indigo-500 font-mono flex-1 cursor-pointer">
+                <button id="lookupBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2 px-4 text-sm rounded-lg transition cursor-pointer shadow-lg font-mono">
+                    Go
+                </button>
+            </div>
+        </div>
+
+        <div id="results" class="hidden p-4 bg-slate-900/40 border border-cyan-500/30 rounded-xl text-left">
+            <div class="flex justify-between items-center mb-1">
+                <h3 class="text-xs text-cyan-400 uppercase tracking-wider font-semibold font-mono">Official Port Turnaround Times</h3>
+                <span id="liveStatusBadge" class="text-[10px] bg-cyan-950 text-cyan-400 px-2 py-0.5 rounded border border-cyan-800 font-mono">Qgov Live</span>
+            </div>
+            
+            <div class="text-[11px] font-mono text-slate-400 mb-4 pb-2 border-b border-slate-700/40">
+                <span class="text-slate-500">Query Target:</span> Townsville, Berth 1 Pumphouse
+            </div>
+            
+            <div id="tideLoading" class="text-xs text-slate-400 text-center py-6 font-mono animate-pulse hidden">Syncing orbits & fetching water grids...</div>
+
+            <div id="tideChartContainer" class="space-y-6 max-h-[500px] overflow-y-auto pr-1">
+                </div>
+        </div>
+    </div>
+
+    <script>
+        const TSV_LAT = -19.2564;
+        const TSV_LON = 146.8183;
+
+        window.addEventListener('DOMContentLoaded', () => {
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = String(today.getMonth() + 1).padStart(2, '0');
+            const day = String(today.getDate()).padStart(2, '0');
+            document.getElementById('targetDateInput').value = `${year}-${month}-${day}`;
+        });
+
+        document.getElementById('lookupBtn').addEventListener('click', () => {
+            const dateInput = document.getElementById('targetDateInput').value;
+            if (!dateInput) return;
+
+            const [year, month, day] = dateInput.split('-');
+            const selectedDate = new Date(year, month - 1, day);
+
+            initUI();
+            
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(
+                    (pos) => { executeDashboard(selectedDate, pos.coords.latitude, pos.coords.longitude); }, 
+                    (err) => { executeDashboard(selectedDate, TSV_LAT, TSV_LON); }, 
+                    { enableHighAccuracy: true, timeout: 5000 }
+                );
+            } else {
+                executeDashboard(selectedDate, TSV_LAT, TSV_LON);
+            }
+        });
+
+        function initUI() {
+            document.getElementById('results').classList.remove('hidden');
+            document.getElementById('tideLoading').classList.remove('hidden');
+            document.getElementById('tideChartContainer').innerHTML = "";
+            
+            const badge = document.getElementById('liveStatusBadge');
+            badge.innerText = "Qgov Live";
+            badge.className = "text-[10px] bg-cyan-950 text-cyan-400 px-2 py-0.5 rounded border border-cyan-800 font-mono";
+        }
+
+        function getJulianDate(date) {
+            return (date.getTime() / 86400000) + 2440587.5;
+        }
+
+        function getMoonTransitTimes(date, lat, lon) {
+            const midnight = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 0, 0, 0);
+            const jdMidnight = getJulianDate(midnight);
+            const T = (jdMidnight - 2451545.0) / 36525.0;
+            
+            const deltaTSeconds = 69.2;
+            const jdCorrected = jdMidnight + (deltaTSeconds / 86400.0);
+            const dSinceJ2000 = jdCorrected - 2451545.0;
+
+            let gmst = 280.46061837 + 360.98564736629 * (jdMidnight - 2451545.0) + 0.000387933 * T * T - T * T * T / 38710000.0;
+            gmst = gmst % 360;
+            if (gmst < 0) gmst += 360;
+
+            const moonMeanLong = (218.316 + 13.176396 * dSinceJ2000) * Math.PI / 180;
+            const moonMeanAnomaly = (134.963 + 13.064993 * dSinceJ2000) * Math.PI / 180;
+            const sunMeanAnomaly = (357.529 + 0.9856003 * dSinceJ2000) * Math.PI / 180;
+            const moonElongation = (297.850 + 12.190749 * dSinceJ2000) * Math.PI / 180;
+
+            let eclipticLong = moonMeanLong + (
+                6.289 * Math.sin(moonMeanAnomaly) +
+                1.274 * Math.sin(2 * moonElongation - moonMeanAnomaly) +
+                0.658 * Math.sin(2 * moonElongation) +
+                0.214 * Math.sin(2 * moonMeanAnomaly) -
+                0.186 * Math.sin(sunMeanAnomaly) -
+                0.114 * Math.sin(2 * moonElongation + moonMeanAnomaly)
+            ) * Math.PI / 180;
+
+            const obliquity = (23.439 - 0.0000004 * dSinceJ2000) * Math.PI / 180;
+            
+            const num = Math.sin(eclipticLong) * Math.cos(obliquity);
+            const den = Math.cos(eclipticLong);
+            let rightAscension = Math.atan2(num, den) * 180 / Math.PI;
+            if (rightAscension < 0) rightAscension += 360;
+
+            let localSiderealTimeMidnight = gmst + lon;
+            let hourAngleMidnight = localSiderealTimeMidnight - rightAscension;
+            hourAngleMidnight = ((hourAngleMidnight + 180) % 360) - 180;
+            if (hourAngleMidnight < -180) hourAngleMidnight += 360;
+
+            let hoursToTransitAbove = (-hourAngleMidnight / 15) * 1.03386;
+            if (hoursToTransitAbove < 0) hoursToTransitAbove += 24;
+            hoursToTransitAbove = hoursToTransitAbove % 24;
+
+            let hoursToTransitBelow = (hoursToTransitAbove + 12.4206) % 24;
+
+            let zenithTimeToday = new Date(midnight.getTime() + (hoursToTransitAbove * 60 * 60 * 1000));
+            let nadirTimeToday = new Date(midnight.getTime() + (hoursToTransitBelow * 60 * 60 * 1000));
+
+            return { zenith: zenithTimeToday, nadir: nadirTimeToday };
+        }
+
+        function formatToQgovDate(dateObj) {
+            const dayStr = String(dateObj.getDate()).padStart(2, '0');
+            const monthStr = String(dateObj.getMonth() + 1).padStart(2, '0');
+            return `${dayStr}/${monthStr}/${dateObj.getFullYear()}`;
+        }
+
+        async function executeDashboard(targetDate, lat, lon) {
+            const qgovTargetStr = formatToQgovDate(targetDate);
+            const sqlQuery = `SELECT * FROM "af1244df-96c1-426f-9e97-1c815e4922e9" WHERE "Date" = '${qgovTargetStr}' ORDER BY "_id" ASC`;
+            const endpointUrl = `https://www.data.qld.gov.au/api/3/action/datastore_search_sql?sql=${encodeURIComponent(sqlQuery)}`;
+
+            try {
+                const response = await fetch(endpointUrl);
+                if (response.ok) {
+                    const json = await response.json();
+                    const records = json.result.records || [];
+                    const container = document.getElementById('tideChartContainer');
+                    container.innerHTML = ""; 
+
+                    const labelOptions = { weekday: 'short', year: 'numeric', month: 'short', day: 'numeric' };
+                    const astroOptions = { hour: '2-digit', minute: '2-digit', hour12: true };
+
+                    const moonData = getMoonTransitTimes(targetDate, lat, lon);
+                    const dateHeaderTitle = targetDate.toLocaleDateString('en-AU', labelOptions);
+
+                    const todayStr = formatToQgovDate(new Date());
+                    const isToday = qgovTargetStr === todayStr;
+
+                    renderCombinedSection(dateHeaderTitle, records, isToday, moonData, astroOptions);
+                    document.getElementById('tideLoading').classList.add('hidden');
+                } else {
+                    triggerErrorFallback();
+                }
+            } catch (error) {
+                triggerErrorFallback();
+            }
+        }
+
+        function renderCombinedSection(title, records, isToday, moonData, astroOptions) {
+            const container = document.getElementById('tideChartContainer');
+            const zenithStr = moonData.zenith.toLocaleTimeString('en-AU', astroOptions);
+            const nadirStr = moonData.nadir.toLocaleTimeString('en-AU', astroOptions);
+            const currentHour = new Date().getHours();
+
+            let dayHtml = `
+                <div class="space-y-2">
+                    <div class="bg-slate-900/60 rounded-xl p-3 border border-slate-700/40 space-y-2">
+                        <div class="text-xs uppercase tracking-widest font-bold text-slate-300 font-mono flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full ${isToday ? 'bg-cyan-400 animate-pulse' : 'bg-slate-500'}"></span>
+                            ${title} ${isToday ? '(Today)' : ''}
+                        </div>
+                        <div class="grid grid-cols-2 gap-2 text-[11px] font-mono">
+                            <div class="bg-emerald-950/30 border border-emerald-500/20 px-2.5 py-1.5 rounded-md flex justify-between items-center">
+                                <span class="text-slate-400">🌕 Above:</span>
+                                <span class="text-emerald-400 font-bold">${zenithStr}</span>
+                            </div>
+                            <div class="bg-rose-950/30 border border-rose-500/20 px-2.5 py-1.5 rounded-md flex justify-between items-center">
+                                <span class="text-slate-400">🌑 Below:</span>
+                                <span class="text-rose-400 font-bold">${nadirStr}</span>
+                            </div>
+                        </div>
+                    </div>
+            `;
+
+            if (records.length === 0) {
+                dayHtml += `
+                    <div class="text-xs text-slate-500 bg-slate-900/10 p-4 rounded-lg border border-slate-800/40 italic text-center">
+                        No port tidal predictions found in the database for this date.
+                    </div>
+                </div>`;
+                container.innerHTML = dayHtml;
+                return;
+            }
+
+            records.forEach(row => {
+                const displayTime = row.Time;
+                const tideHeight = parseFloat(row.Reading);
+                const isHigh = row.Ind === "1" || row.Ind === 1 || tideHeight > 2.0;
+
+                const barWidth = Math.min(Math.max((tideHeight / 4.0) * 100, 5), 100);
+                const rowHour = parseInt(displayTime.split(':')[0], 10);
+                const isNow = isToday && (rowHour === currentHour);
+                
+                const rowBg = isNow 
+                    ? 'bg-cyan-950/60 border border-cyan-500/50 font-bold' 
+                    : 'bg-slate-900/40 border border-slate-800/80';
+
+                const marker = isHigh 
+                    ? `<span class="text-[9px] text-emerald-400 bg-emerald-950/80 px-1.5 py-0.5 rounded font-sans uppercase font-bold tracking-wide">High</span>` 
+                    : `<span class="text-[9px] text-rose-400 bg-rose-950/80 px-1.5 py-0.5 rounded font-sans uppercase font-bold tracking-wide">Low</span>`;
+
+                dayHtml += `
+                    <div class="flex items-center justify-between text-xs p-2.5 rounded-lg ${rowBg}">
+                        <div class="w-20 flex flex-col gap-1">
+                            <span class="font-mono text-slate-300 text-sm font-semibold">${displayTime}</span>
+                            <div>${marker}</div>
+                        </div>
+                        <div class="flex-1 mx-4 bg-slate-800 h-2.5 rounded-full overflow-hidden border border-slate-700/50">
+                            <div class="bg-gradient-to-r from-cyan-500 to-blue-400 h-full rounded-full transition-all" style="width: ${barWidth}%"></div>
+                        </div>
+                        <span class="w-16 text-right font-bold text-cyan-300 font-mono text-sm">${tideHeight.toFixed(2)}m</span>
+                    </div>
+                `;
+            });
+
+            dayHtml += `</div>`;
+            container.innerHTML = dayHtml;
+        }
+
+        function triggerErrorFallback() {
+            const loader = document.getElementById('tideLoading');
+            const container = document.getElementById('tideChartContainer');
+            const badge = document.getElementById('liveStatusBadge');
+            loader.classList.add('hidden');
+            badge.innerText = "Offline";
+            badge.className = "text-[10px] bg-rose-950 text-rose-400 px-2 py-0.5 rounded border border-rose-900 font-mono";
+            container.innerHTML = `<div class="p-6 bg-rose-950/20 border border-rose-500/20 rounded-xl text-center space-y-2"><p class="text-xl">⚠️</p><h4 class="text-sm font-bold text-rose-400">Connection Interrupted</h4><p class="text-xs text-slate-400 leading-relaxed">A secure data link could not be established with the Queensland Marine Telemetry servers.</p></div>`;
+        }
+
+        // --- PWA SERVICE WORKER REGISTRATION BOILERPLATE ---
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('sw.js')
+                    .then(reg => console.log('AstroMarine Core Active'))
+                    .catch(err => console.log('Registration skipped'));
+            });
+        }
+    </script>
+</body>
+</html>
